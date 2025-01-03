@@ -1,0 +1,63 @@
+from flask import Flask, request, jsonify
+from transformers import BertTokenizer, BertForSequenceClassification
+import torch
+import time
+
+# Path to your model directory
+MODEL_PATH = "./sentiment_model"
+
+# Load the model and tokenizer
+model = BertForSequenceClassification.from_pretrained(MODEL_PATH, local_files_only=True)
+tokenizer = BertTokenizer.from_pretrained(MODEL_PATH, local_files_only=True)
+model.eval()
+
+# Use GPU if available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+# Flask app
+app = Flask(__name__)
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    try:
+        start_time = time.time()  # Start timing
+
+        # Validate the request payload
+        data = request.json
+        if not data or 'text' not in data or not isinstance(data['text'], str) or not data['text'].strip():
+            return jsonify({"error": "Invalid input: 'text' field must be a non-empty string"}), 400
+
+        # Tokenize the input text
+        inputs = tokenizer(
+            data['text'],
+            truncation=True,
+            padding='max_length',
+            max_length=128,
+            return_tensors="pt"
+        )
+
+        # Move input tensors to the same device as the model
+        inputs = {key: val.to(device) for key, val in inputs.items()}
+
+        # Inference
+        with torch.no_grad():
+            outputs = model(**inputs)
+            logits = outputs.logits
+            prediction = torch.argmax(logits, dim=1).item()
+
+        # Map prediction to sentiment label
+        sentiment_labels = ["Negative", "Neutral", "Positive"]
+        result = sentiment_labels[prediction]
+
+        # End timing
+        end_time = time.time()
+        print(f"Prediction completed in {end_time - start_time:.2f} seconds")
+
+        return jsonify({"text": data['text'], "predicted_sentiment": result})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='127.0.0.1', port=5002, debug=True)
